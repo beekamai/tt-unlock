@@ -1,0 +1,27 @@
+# Build
+/build/
+*.o
+*.obj
+*.exe
+!release/tt-unlock.exe
+
+# Local run artifacts
+/output/
+*.jks
+*.keystore
+*.apk
+*.idsig
+
+# IDE / OS
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+.DS_Store
+Thumbs.db
+
+# Temp
+*.log
+*.tmp
+/dist/

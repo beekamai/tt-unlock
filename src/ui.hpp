@@ -119,8 +119,8 @@ inline void banner() {
         sleep_ms(28);
     }
     std::cout << "\n";
-    print_center("TikTok region unlock  ·  carrier_region → DE  ·  adb patcher", c::cyan);
-    print_center("v0.1  ·  static Windows build  ·  educational tooling", c::gray);
+    print_center("TikTok SIM spoof  ·  DE Telekom  ·  adb DEX patcher", c::cyan);
+    print_center("v0.2.0  ·  static Windows build  ·  educational tooling", c::gray);
     std::cout << "\n";
     hr();
     std::cout << "\n";
@@ -274,7 +274,7 @@ inline void checklist_permissions() {
     std::cout << "\n";
     warn("Переподпись убивает Play Integrity → Google login обычно НЕ работает.");
     info("Вход по почте / username+password — ок (проверено).");
-    info("Регион-патч: carrier_region / sys_region / op_region → DE");
+    info("SIM spoof: ISO de + MCC 26201 + Telekom (+ hub 155y → DE)");
 }
 
 inline void show_steps_overview() {
@@ -282,8 +282,8 @@ inline void show_steps_overview() {
     const char* steps[] = {
         "Найдёт adb и устройство",
         "Снимет split-APK TikTok (com.zhiliaoapp.musically)",
-        "Найдёт region-hub в classes*.dex (SIM → carrier_region)",
-        "Заглушит геттеры региона константой DE",
+        "Найдёт BPEA TelephonyManager wrappers + hub 155y",
+        "Заглушит ISO/MCC/name → de / 26201 / Telekom",
         "Подпишет все splits одним ключом",
         "Удалит stock TikTok и поставит патч",
     };
@@ -300,9 +300,9 @@ inline void success_finale() {
     print_center("✦  ПАТЧ УСТАНОВЛЕН  ✦", c::mint);
     hr(c::mint);
     std::cout << "\n";
-    ok("TikTok переустановлен с region → DE");
+    ok("TikTok переустановлен с SIM spoof → DE Telekom");
     info("Открой приложение → день рождения 18+ → гость или почта");
-    info("VPN DE должен быть включён");
+    info("VPN DE включи ДО первого открытия (иначе server device_id)");
     warn("Не обновляй TikTok из Play — снесёт патч. Гоняй этот тул снова.");
     std::cout << "\n";
 }

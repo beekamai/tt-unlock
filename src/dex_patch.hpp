@@ -1,15 +1,23 @@
 #pragma once
-/* Surgical DEX region stubber — version-resilient.
+/* Surgical DEX SIM spoof — ReVanced/Morphe-style, stock TikTok only.
  *
- * Strategy (in order):
- *  1. Find methods that const-string BPEA tags (bpea-getSimCountryIso, …)
- *     and stub those (ByteDance privacy wrappers around TelephonyManager).
- *  2. Stub any static method that directly invoke-virtual getSimCountryIso /
- *     getNetworkCountryIso and returns String (any arity).
- *  3. If LX/155y; still has static String() getters (older builds), stub them.
+ * Default profile (DE Telekom):
+ *   country ISO   → "de"  (TelephonyManager style)
+ *   MCC+MNC       → "26201"  (numeric only — never "de")
+ *   operator name → "Telekom"
+ *   region hub    → "DE" when present (155y uppercases carrier ISO)
  *
- * Never mass-stubs huge utility classes — that crashed TikTok (ClassNotFound
- * after verifier killed classes14.dex).
+ * What we patch (safe on 46.4.x ART):
+ *  1. BPEA leaf wrappers tagged TelephonyManager_* / bpea-get* that are
+ *     public static, return String, and have tries_size == 0.
+ *  2. Region hub LX/155y (or C4936155y): static String getters (LIZ/LJ/…).
+ *
+ * What we deliberately skip (crash / CDN / search regressions):
+ *  - Outer BPEA methods with try/catch (embed the same tag for findCert)
+ *  - string_ids relocation / random digit string rewrite
+ *  - Hardcoding store_region / app_region / account region query params
+ *
+ * MCC/name stubs only apply when the target string already exists in that dex.
  */
 #include "util.hpp"
 #include <cstring>
@@ -17,6 +25,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace dex {
@@ -57,6 +66,14 @@ inline uint32_t read_uleb128(const uint8_t* data, size_t size, size_t& off) {
         if (shift > 35) break;
     }
     return result;
+}
+
+inline void write_uleb128(std::vector<uint8_t>& out, uint32_t v) {
+    while (v > 0x7fu) {
+        out.push_back(uint8_t((v & 0x7fu) | 0x80u));
+        v >>= 7;
+    }
+    out.push_back(uint8_t(v));
 }
 
 inline std::string read_mutf8(const uint8_t* data, size_t size, size_t off) {
@@ -140,43 +157,68 @@ struct DexView {
     }
 };
 
-// Early-return stub: overwrite only the first instructions with
-//   const-string vN, "de" / return-object vN
-// Leave the rest of the original bytecode, tries_size and debug_info_off
-// intact so ART verification of try tables / debug still passes.
-// (Zeroing tries/debug caused "Invalid debug_info_off" / class load failure.)
-inline bool stub_code_item(std::vector<uint8_t>& data, uint32_t code_off, uint32_t de_str_idx) {
+// Find existing string, or repurpose a same-length all-digit string by
+// overwriting its MUTF-8 payload in place (no string_ids relocation).
+// Relocating string_ids to EOF made ART throw NoClassDefFoundError on 46.4.3.
+inline bool ensure_string(DexView& dex, const std::string& s, uint32_t& out_idx) {
+    if (auto id = dex.find_string(s)) {
+        out_idx = *id;
+        return true;
+    }
+    if (s.empty() || s.size() > 64) return false;
+
+    // Prefer repurposing pure-digit strings of the same length (MCC-like).
+    for (uint32_t i = 0; i < dex.string_ids_size; ++i) {
+        auto cur = dex.string_at(i);
+        if (cur.size() != s.size()) continue;
+        bool digits = true;
+        for (char c : cur) {
+            if (c < '0' || c > '9') { digits = false; break; }
+        }
+        if (!digits) continue;
+
+        size_t off = ru32(dex.data.data() + dex.string_ids_off + i * 4u);
+        if (off >= dex.data.size()) continue;
+        size_t o = off;
+        (void)read_uleb128(dex.data.data(), dex.data.size(), o);
+        if (o + s.size() >= dex.data.size()) continue;
+        // same uleb length encoding for equal sizes < 128
+        for (size_t k = 0; k < s.size(); ++k)
+            dex.data[o + k] = static_cast<uint8_t>(s[k]);
+        out_idx = i;
+        return true;
+    }
+    return false;
+}
+
+// Early-return String: const-string v0, X / return-object v0
+// Leave rest of bytecode / tries / debug intact (ART verifier).
+inline bool stub_return_string(std::vector<uint8_t>& data, uint32_t code_off, uint32_t str_idx) {
     if (code_off == 0 || code_off + 16 > data.size()) return false;
     uint8_t* base = data.data() + code_off;
     uint16_t registers_size = ru16(base + 0);
     uint16_t ins_size = ru16(base + 2);
     uint32_t insns_size = ru32(base + 12);
-    const bool jumbo = de_str_idx > 0xFFFFu;
-    const uint32_t need = jumbo ? 4u : 3u; // units to write
+    const bool jumbo = str_idx > 0xFFFFu;
+    const uint32_t need = jumbo ? 4u : 3u;
     if (insns_size < need) return false;
     if (code_off + 16 + insns_size * 2u > data.size()) return false;
 
-    // Dalvik params occupy the last `ins_size` registers.
-    // Prefer a free local at v0 when registers_size > ins_size; else reuse v0 anyway.
-    if (registers_size < 1) {
+    if (registers_size < 1)
         wu16(base + 0, static_cast<uint16_t>(ins_size + 1));
-        registers_size = static_cast<uint16_t>(ins_size + 1);
-    }
-    const uint8_t v = 0; // always v0 (local or first param — both OK before return)
 
+    const uint8_t v = 0;
     uint8_t* insns = base + 16;
     if (jumbo) {
-        // const-string/jumbo vAA, string@BBBBBBBB  (3 units) + return-object (1)
         wu16(insns + 0, static_cast<uint16_t>(0x001b | (uint16_t(v) << 8)));
-        wu16(insns + 2, static_cast<uint16_t>(de_str_idx & 0xffff));
-        wu16(insns + 4, static_cast<uint16_t>((de_str_idx >> 16) & 0xffff));
+        wu16(insns + 2, static_cast<uint16_t>(str_idx & 0xffff));
+        wu16(insns + 4, static_cast<uint16_t>((str_idx >> 16) & 0xffff));
         wu16(insns + 6, static_cast<uint16_t>(0x0011 | (uint16_t(v) << 8)));
     } else {
         wu16(insns + 0, static_cast<uint16_t>(0x001a | (uint16_t(v) << 8)));
-        wu16(insns + 2, static_cast<uint16_t>(de_str_idx & 0xffff));
+        wu16(insns + 2, static_cast<uint16_t>(str_idx & 0xffff));
         wu16(insns + 4, static_cast<uint16_t>(0x0011 | (uint16_t(v) << 8)));
     }
-    // Do NOT nop-fill, do NOT touch tries_size / debug_info_off.
     return true;
 }
 
@@ -189,9 +231,9 @@ inline bool code_has_const_string(const std::vector<uint8_t>& data, uint32_t cod
     const uint16_t* insns = reinterpret_cast<const uint16_t*>(base + 16);
     for (uint32_t i = 0; i + 1 < insns_size; ++i) {
         uint8_t op = insns[i] & 0xff;
-        if (op == 0x1a) { // const-string
+        if (op == 0x1a) {
             if (string_idxs.count(insns[i + 1])) return true;
-        } else if (op == 0x1b && i + 2 < insns_size) { // const-string/jumbo
+        } else if (op == 0x1b && i + 2 < insns_size) {
             uint32_t idx = uint32_t(insns[i + 1]) | (uint32_t(insns[i + 2]) << 16);
             if (string_idxs.count(idx)) return true;
         }
@@ -199,21 +241,63 @@ inline bool code_has_const_string(const std::vector<uint8_t>& data, uint32_t cod
     return false;
 }
 
-inline bool code_refs_methods(const std::vector<uint8_t>& data, uint32_t code_off,
-                              const std::set<uint32_t>& targets) {
-    if (code_off == 0 || code_off + 16 > data.size() || targets.empty()) return false;
-    const uint8_t* base = data.data() + code_off;
-    uint32_t insns_size = ru32(base + 12);
-    if (code_off + 16 + insns_size * 2u > data.size()) return false;
-    const uint16_t* insns = reinterpret_cast<const uint16_t*>(base + 16);
-    for (uint32_t i = 0; i + 1 < insns_size; ++i) {
-        uint8_t op = insns[i] & 0xff;
-        if ((op >= 0x6e && op <= 0x72) || (op >= 0x74 && op <= 0x78)) {
-            if (targets.count(insns[i + 1])) return true;
+inline void fix_dex_checksum(std::vector<uint8_t>& data) {
+    if (data.size() <= 32) return;
+    // SHA-1 of data[32..] → signature [12..32)
+    {
+        uint32_t h0=0x67452301,h1=0xEFCDAB89,h2=0x98BADCFE,h3=0x10325476,h4=0xC3D2E1F0;
+        auto rol=[](uint32_t x,int n){return (x<<n)|(x>>(32-n));};
+        const uint8_t* p = data.data() + 32;
+        size_t len = data.size() - 32;
+        size_t padlen = ((len + 8) / 64 + 1) * 64;
+        std::vector<uint8_t> msg(padlen, 0);
+        std::memcpy(msg.data(), p, len);
+        msg[len] = 0x80;
+        uint64_t bl = static_cast<uint64_t>(len) * 8ull;
+        for (int i = 0; i < 8; ++i)
+            msg[padlen - 8 + i] = static_cast<uint8_t>((bl >> (56 - 8 * i)) & 0xff);
+        for (size_t chunk = 0; chunk < padlen; chunk += 64) {
+            uint32_t w[80];
+            for (int i = 0; i < 16; ++i)
+                w[i] = (uint32_t(msg[chunk+4*i])<<24)|(uint32_t(msg[chunk+4*i+1])<<16)|
+                       (uint32_t(msg[chunk+4*i+2])<<8)|uint32_t(msg[chunk+4*i+3]);
+            for (int i = 16; i < 80; ++i)
+                w[i] = rol(w[i-3]^w[i-8]^w[i-14]^w[i-16], 1);
+            uint32_t A=h0,B=h1,C=h2,D=h3,E=h4;
+            for (int i = 0; i < 80; ++i) {
+                uint32_t f,k;
+                if (i < 20) { f=(B&C)|((~B)&D); k=0x5A827999; }
+                else if (i < 40) { f=B^C^D; k=0x6ED9EBA1; }
+                else if (i < 60) { f=(B&C)|(B&D)|(C&D); k=0x8F1BBCDC; }
+                else { f=B^C^D; k=0xCA62C1D6; }
+                uint32_t t = rol(A,5)+f+E+k+w[i];
+                E=D; D=C; C=rol(B,30); B=A; A=t;
+            }
+            h0+=A; h1+=B; h2+=C; h3+=D; h4+=E;
         }
+        auto put_be=[&](uint32_t v, int o){
+            data[12+o]=(v>>24)&0xff; data[13+o]=(v>>16)&0xff;
+            data[14+o]=(v>>8)&0xff; data[15+o]=v&0xff;
+        };
+        put_be(h0,0); put_be(h1,4); put_be(h2,8); put_be(h3,12); put_be(h4,16);
     }
-    return false;
+    // Adler-32 of [12..end) → checksum @8
+    uint32_t a = 1, b = 0;
+    const uint8_t* p = data.data() + 12;
+    size_t n = data.size() - 12;
+    for (size_t i = 0; i < n; ++i) {
+        a = (a + p[i]) % 65521;
+        b = (b + a) % 65521;
+    }
+    wu32(data.data() + 8, (b << 16) | a);
 }
+
+// Default spoof profile: DE Telekom (same as TikTokSimSpoof / Morphe presets).
+struct SimSpoofProfile {
+    const char* country_iso = "de";   // TelephonyManager style lowercase
+    const char* mcc_mnc     = "26201";
+    const char* op_name     = "Telekom";
+};
 
 inline PatchReport patch_dex(std::vector<uint8_t>& buf, const std::string& label) {
     PatchReport rep;
@@ -226,40 +310,99 @@ inline PatchReport patch_dex(std::vector<uint8_t>& buf, const std::string& label
         return rep;
     }
 
-    auto de = dex.find_string("DE");
-    if (!de) de = dex.find_string("de");
-    if (!de) de = dex.find_string("US");
-    if (!de) de = dex.find_string("GB");
-    if (!de) {
-        for (uint32_t i = 0; i < std::min(dex.string_ids_size, 300000u); ++i) {
-            auto s = dex.string_at(i);
-            if (s.size() == 2 && s[0] >= 'A' && s[0] <= 'Z' && s[1] >= 'A' && s[1] <= 'Z') {
-                de = i;
-                break;
-            }
-        }
+    SimSpoofProfile prof;
+
+    // Resolve spoof strings. Prefer exact profile; fall back to common ISO tokens.
+    uint32_t iso_idx = 0, iso_upper_idx = 0, mcc_idx = 0, name_idx = 0;
+    bool have_iso = false, have_iso_upper = false, have_mcc = false, have_name = false;
+
+    if (auto id = dex.find_string(prof.country_iso)) {
+        iso_idx = *id; have_iso = true;
+    } else if (auto id = dex.find_string("DE")) {
+        iso_idx = *id; have_iso = true;
+    } else if (auto id = dex.find_string("US")) {
+        iso_idx = *id; have_iso = true;
     }
-    if (!de) {
-        rep.notes.push_back(label + ": no country string");
+
+    if (auto id = dex.find_string("DE")) {
+        iso_upper_idx = *id; have_iso_upper = true;
+    } else if (have_iso) {
+        iso_upper_idx = iso_idx; have_iso_upper = true;
+    }
+
+    if (!have_iso) {
+        rep.notes.push_back(label + ": no country ISO string");
         buf.swap(dex.data);
         return rep;
     }
 
-    // ONLY country-ISO BPEA tags. Do NOT touch getSimOperator / operator name —
-    // those must stay numeric MCC+MNC (e.g. "25062"). Returning "de" there
-    // breaks mcc_mnc / CDN / profile media after device register.
-    static const char* kCountryBpeaTags[] = {
-        "bpea-getSimCountryIso",
-        "bpea-getNetworkCountryIso",
-        "TelephonyManager_getSimCountryIso",
-        "TelephonyManager_getNetworkCountryIso",
+    // Tag → which spoof value to return
+    enum class SpoofKind { Iso, Mcc, Name };
+    std::vector<std::pair<const char*, SpoofKind>> tag_map = {
+        // country ISO
+        {"bpea-getSimCountryIso", SpoofKind::Iso},
+        {"bpea-getNetworkCountryIso", SpoofKind::Iso},
+        {"TelephonyManager_getSimCountryIso", SpoofKind::Iso},
+        {"TelephonyManager_getNetworkCountryIso", SpoofKind::Iso},
+        // MCC+MNC (numeric — never "de")
+        {"bpea-getSimOperator", SpoofKind::Mcc},
+        {"bpea-getNetworkOperator", SpoofKind::Mcc},
+        {"TelephonyManager_getSimOperator", SpoofKind::Mcc},
+        {"TelephonyManager_getNetworkOperator", SpoofKind::Mcc},
+        // operator display name
+        {"bpea-getSimOperatorName", SpoofKind::Name},
+        {"bpea-getNetworkOperatorName", SpoofKind::Name},
+        {"TelephonyManager_getSimOperatorName", SpoofKind::Name},
+        {"TelephonyManager_getNetworkOperatorName", SpoofKind::Name},
     };
-    std::set<uint32_t> bpea_strings;
-    for (auto* tag : kCountryBpeaTags) {
-        if (auto id = dex.find_string(tag)) bpea_strings.insert(*id);
+
+    std::set<uint32_t> tags_iso, tags_mcc, tags_name;
+    bool need_mcc = false, need_name = false;
+    for (auto& [tag, kind] : tag_map) {
+        if (auto id = dex.find_string(tag)) {
+            if (kind == SpoofKind::Iso) tags_iso.insert(*id);
+            else if (kind == SpoofKind::Mcc) { tags_mcc.insert(*id); need_mcc = true; }
+            else if (kind == SpoofKind::Name) { tags_name.insert(*id); need_name = true; }
+        }
     }
 
-    // Region hub (older builds): static String getters LIZ/LJ/LJFF…
+    // MCC/name only when the exact (or known-good) string already lives in this dex.
+    // In-place digit rewrite / string_ids inject caused NoClassDefFoundError on 46.4.3.
+    if (need_mcc) {
+        static const char* kMccCandidates[] = {
+            "26201", "26202", "26203", "26207", "31026", "310260", "23415", "20801"
+        };
+        for (auto* cand : kMccCandidates) {
+            if (auto id = dex.find_string(cand)) {
+                // Prefer exact profile length (5 for DE Telekom 26201).
+                if (std::string(cand) == prof.mcc_mnc || std::strlen(cand) == std::strlen(prof.mcc_mnc)) {
+                    mcc_idx = *id; have_mcc = true;
+                    if (std::string(cand) == prof.mcc_mnc) break;
+                }
+            }
+        }
+        if (!have_mcc) {
+            if (auto id = dex.find_string(prof.mcc_mnc)) {
+                mcc_idx = *id; have_mcc = true;
+            }
+        }
+    }
+    if (!have_mcc) tags_mcc.clear();
+
+    if (need_name) {
+        static const char* kNameCandidates[] = {
+            "Telekom", "T-Mobile", "Vodafone", "O2", "Orange"
+        };
+        for (auto* cand : kNameCandidates) {
+            if (auto id = dex.find_string(cand)) {
+                name_idx = *id; have_name = true;
+                if (std::string(cand) == prof.op_name) break;
+            }
+        }
+    }
+    if (!have_name) tags_name.clear();
+
+    // Region hub class (carrier_region cascade)
     std::set<uint32_t> force_classes;
     for (uint32_t i = 0; i < dex.type_ids_size; ++i) {
         auto t = dex.type_name(i);
@@ -267,8 +410,16 @@ inline PatchReport patch_dex(std::vector<uint8_t>& buf, const std::string& label
             force_classes.insert(i);
     }
 
-    std::set<uint32_t> code_offs_to_stub;
+    // code_off → string index to return
+    std::vector<std::pair<uint32_t, uint32_t>> stubs;
     std::set<uint32_t> classes_touched;
+    int n_iso = 0, n_mcc = 0, n_name = 0, n_hub = 0;
+
+    auto add_stub = [&](uint32_t code_off, uint32_t class_idx, uint32_t str_idx, int* counter) {
+        stubs.emplace_back(code_off, str_idx);
+        classes_touched.insert(class_idx);
+        if (counter) (*counter)++;
+    };
 
     for (uint32_t c = 0; c < dex.class_defs_size; ++c) {
         size_t coff = dex.class_defs_off + c * 32u;
@@ -290,12 +441,10 @@ inline PatchReport patch_dex(std::vector<uint8_t>& buf, const std::string& label
         struct Meth {
             uint32_t code_off;
             uint32_t access;
-            uint32_t method_idx;
             bool returns_string;
             std::string name;
         };
         std::vector<Meth> meths;
-        int country_bpea_hits = 0;
 
         auto walk = [&](uint32_t n) {
             uint32_t mi = 0;
@@ -307,121 +456,80 @@ inline PatchReport patch_dex(std::vector<uint8_t>& buf, const std::string& label
                 auto mid = dex.method_id(mi);
                 bool rs = dex.proto_returns_string(mid.proto_idx);
                 std::string mname = dex.string_at(mid.name_idx);
-                meths.push_back({code_off, access, mi, rs, mname});
+                meths.push_back({code_off, access, rs, mname});
 
-                // Strict: only methods that literally contain country-ISO BPEA tags
-                if (rs && (access & 0x8) &&
-                    code_has_const_string(dex.data, code_off, bpea_strings)) {
-                    code_offs_to_stub.insert(code_off);
-                    classes_touched.insert(class_idx);
-                    country_bpea_hits++;
+                // BPEA leaf helpers only:
+                //  - must return String
+                //  - must be static (wrappers are static)
+                //  - tries_size == 0  (outer methods with try/catch also embed the
+                //    tag string for findCert(); early-return stubs there crash ART
+                //    with ClassNotFound on unrelated types — verified on 46.4.3)
+                if (!rs) continue;
+                if ((access & 0x8) == 0) continue; // ACC_STATIC
+                if (code_off + 16 > dex.data.size()) continue;
+                uint16_t tries = ru16(dex.data.data() + code_off + 6);
+                if (tries != 0) continue;
+
+                if (code_has_const_string(dex.data, code_off, tags_iso)) {
+                    add_stub(code_off, class_idx, iso_idx, &n_iso);
+                } else if (have_mcc && code_has_const_string(dex.data, code_off, tags_mcc)) {
+                    add_stub(code_off, class_idx, mcc_idx, &n_mcc);
+                } else if (have_name && code_has_const_string(dex.data, code_off, tags_name)) {
+                    add_stub(code_off, class_idx, name_idx, &n_name);
                 }
             }
         };
         walk(dm);
         walk(vm);
 
-        // Old 155y hub (if it still has real static getters, not an empty shell)
+        // 155y region hub: force country ISO on static String getters (no try/catch).
         if (force_classes.count(class_idx) && meths.size() >= 4 && meths.size() <= 40) {
             static const char* kNames[] = {
                 "LIZ", "LIZIZ", "LIZJ", "LIZLLL", "LJ", "LJFF", "getSimCountry",
                 "getCarrierRegion", "getSysRegion", "getRegion", "getOpRegion"
             };
+            uint32_t hub_str = have_iso_upper ? iso_upper_idx : iso_idx;
             for (auto& m : meths) {
                 if (!(m.access & 0x8) || !m.returns_string) continue;
+                if (m.code_off + 16 > dex.data.size()) continue;
+                if (ru16(dex.data.data() + m.code_off + 6) != 0) continue; // tries_size
                 for (auto* kn : kNames) {
                     if (m.name == kn) {
-                        code_offs_to_stub.insert(m.code_off);
-                        classes_touched.insert(class_idx);
+                        add_stub(m.code_off, class_idx, hub_str, &n_hub);
                         break;
                     }
                 }
             }
         }
-        (void)country_bpea_hits;
     }
 
+    // Dedup code_offs (same method may match twice)
+    std::set<uint32_t> seen;
     int stubbed = 0;
-    for (uint32_t code_off : code_offs_to_stub) {
-        if (stub_code_item(dex.data, code_off, *de)) stubbed++;
+    for (auto& [code_off, str_idx] : stubs) {
+        if (!seen.insert(code_off).second) continue;
+        if (stub_return_string(dex.data, code_off, str_idx)) stubbed++;
     }
 
-    // ART rejects modified dex with "Bad checksum" if we don't fix the header.
-    // checksum @8: adler32 of bytes [12 .. end)
-    // signature @12: SHA-1 of bytes [32 .. end) — optional on many devices,
-    // but recompute both for safety (adler is mandatory on Xiaomi/ART here).
-    if (stubbed > 0 && dex.data.size() > 32) {
-        // Adler-32
-        uint32_t a = 1, b = 0;
-        const uint8_t* p = dex.data.data() + 12;
-        size_t n = dex.data.size() - 12;
-        for (size_t i = 0; i < n; ++i) {
-            a = (a + p[i]) % 65521;
-            b = (b + a) % 65521;
-        }
-        uint32_t sum = (b << 16) | a;
-        wu32(dex.data.data() + 8, sum);
-
-        // SHA-1 of data[32..] into signature field at [12..32)
-        {
-            uint32_t h0=0x67452301,h1=0xEFCDAB89,h2=0x98BADCFE,h3=0x10325476,h4=0xC3D2E1F0;
-            auto rol=[](uint32_t x,int n){return (x<<n)|(x>>(32-n));};
-            const uint8_t* data = dex.data.data() + 32;
-            size_t len = dex.data.size() - 32;
-            size_t padlen = ((len + 8) / 64 + 1) * 64;
-            std::vector<uint8_t> msg(padlen, 0);
-            std::memcpy(msg.data(), data, len);
-            msg[len] = 0x80;
-            uint64_t bl = static_cast<uint64_t>(len) * 8ull;
-            for (int i = 0; i < 8; ++i)
-                msg[padlen - 8 + i] = static_cast<uint8_t>((bl >> (56 - 8 * i)) & 0xff);
-            for (size_t chunk = 0; chunk < padlen; chunk += 64) {
-                uint32_t w[80];
-                for (int i = 0; i < 16; ++i)
-                    w[i] = (uint32_t(msg[chunk+4*i])<<24)|(uint32_t(msg[chunk+4*i+1])<<16)|
-                           (uint32_t(msg[chunk+4*i+2])<<8)|uint32_t(msg[chunk+4*i+3]);
-                for (int i = 16; i < 80; ++i)
-                    w[i] = rol(w[i-3]^w[i-8]^w[i-14]^w[i-16], 1);
-                uint32_t A=h0,B=h1,C=h2,D=h3,E=h4;
-                for (int i = 0; i < 80; ++i) {
-                    uint32_t f,k;
-                    if (i < 20) { f=(B&C)|((~B)&D); k=0x5A827999; }
-                    else if (i < 40) { f=B^C^D; k=0x6ED9EBA1; }
-                    else if (i < 60) { f=(B&C)|(B&D)|(C&D); k=0x8F1BBCDC; }
-                    else { f=B^C^D; k=0xCA62C1D6; }
-                    uint32_t t = rol(A,5)+f+E+k+w[i];
-                    E=D; D=C; C=rol(B,30); B=A; A=t;
-                }
-                h0+=A; h1+=B; h2+=C; h3+=D; h4+=E;
-            }
-            auto put_be=[&](uint32_t v, int o){
-                dex.data[12+o]=(v>>24)&0xff; dex.data[13+o]=(v>>16)&0xff;
-                dex.data[14+o]=(v>>8)&0xff; dex.data[15+o]=v&0xff;
-            };
-            put_be(h0,0); put_be(h1,4); put_be(h2,8); put_be(h3,12); put_be(h4,16);
-        }
-
-        // checksum AFTER signature (signature sits inside the hashed range for adler)
-        a = 1; b = 0;
-        p = dex.data.data() + 12;
-        n = dex.data.size() - 12;
-        for (size_t i = 0; i < n; ++i) {
-            a = (a + p[i]) % 65521;
-            b = (b + a) % 65521;
-        }
-        sum = (b << 16) | a;
-        wu32(dex.data.data() + 8, sum);
-    }
+    if (stubbed > 0)
+        fix_dex_checksum(dex.data);
 
     buf.swap(dex.data);
     rep.methods_stubbed = stubbed;
     rep.classes_hit = static_cast<int>(classes_touched.size());
     if (stubbed) {
-        rep.notes.push_back(label + ": stubbed " + std::to_string(stubbed) +
-                            " method(s) in " + std::to_string(classes_touched.size()) +
-                            " class(es) [checksum fixed]");
+        rep.notes.push_back(
+            label + ": SIM spoof stubbed " + std::to_string(stubbed) +
+            " method(s) in " + std::to_string(classes_touched.size()) +
+            " class(es) [iso=" + std::to_string(n_iso) +
+            " mcc=" + std::to_string(n_mcc) +
+            " name=" + std::to_string(n_name) +
+            " hub=" + std::to_string(n_hub) +
+            " mcc_str=" + (have_mcc ? "1" : "0") +
+            " name_str=" + (have_name ? "1" : "0") +
+            "]");
     } else {
-        rep.notes.push_back(label + ": no targets");
+        rep.notes.push_back(label + ": no SIM targets");
     }
     return rep;
 }

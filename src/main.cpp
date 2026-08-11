@@ -164,10 +164,10 @@ static int run_full_patch(Tools& t) {
         return 1;
     }
 
-    section("4/6  Патчу region hub (DEX)");
+    section("4/6  Патчу SIM spoof (DEX)");
     fs::path patched_base = t.work / "base_patched.apk";
     {
-        Spinner sp3("Сканирую classes*.dex (только region hub → DE)…");
+        Spinner sp3("Сканирую classes*.dex (BPEA + region hub → DE Telekom)…");
         auto pr = apk::patch_base_apk(base, patched_base);
         sp3.stop(pr.ok, pr.ok
             ? ("Готово: " + std::to_string(pr.methods) + " methods / " +
@@ -176,7 +176,7 @@ static int run_full_patch(Tools& t) {
             : "Патч не применился");
         for (auto& L : pr.log) dim(L);
         if (!pr.ok) {
-            fail("Не нашли region-методы. Версия TikTok слишком новая/старая — нужен update эвристик.");
+            fail("Не нашли SIM/region-методы. Версия TikTok слишком новая/старая — нужен update эвристик.");
             return 1;
         }
         // Sanity: patched apk must not be wildly smaller than original
@@ -348,12 +348,13 @@ int main() {
         }
         if (choice == 4) {
             ui::section("About");
-            ui::box_line("TT-UNLOCK — клиентский патч TikTok region gate");
-            ui::box_line("Меняет carrier_region / sys_region / op_region → DE");
-            ui::box_line("Цель: SIM MCC 250 (RU) больше не режет ленту post-2022");
-            ui::box_line("Google login обычно ломается (Play Integrity / подпись)");
-            ui::box_line("Educational tooling. Риск бана — на тебе.");
-            ui::box_line("Static MinGW build · C++17 · miniz DEX rewrite");
+            ui::box_line("TT-UNLOCK — client SIM spoof for stock TikTok");
+            ui::box_line("Profile: DE Telekom  (de / 26201 / Telekom)");
+            ui::box_line("BPEA leaves (static, no try/catch) + hub 155y");
+            ui::box_line("Does not hardcode store_region / account region");
+            ui::box_line("Google login usually dies (Play Integrity / resign)");
+            ui::box_line("Educational tooling. Ban risk is on you.");
+            ui::box_line("Static MinGW · C++17 · miniz  ·  v0.2.0");
             ui::pause();
             ui::banner();
             continue;

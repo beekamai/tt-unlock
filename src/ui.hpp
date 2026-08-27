@@ -120,7 +120,7 @@ inline void banner() {
     }
     std::cout << "\n";
     print_center("TikTok SIM spoof  ·  DE Telekom  ·  adb DEX patcher", c::cyan);
-    print_center("v0.2.0  ·  static Windows build  ·  educational tooling", c::gray);
+    print_center("v0.3.0  ·  static Windows build  ·  educational tooling", c::gray);
     std::cout << "\n";
     hr();
     std::cout << "\n";

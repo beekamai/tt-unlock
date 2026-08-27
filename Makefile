@@ -18,7 +18,7 @@ CXXFLAGS := -std=c++17 -O2 -DNDEBUG -D_WIN32_WINNT=0x0A00 \
 
 LDFLAGS  := -static -static-libgcc -static-libstdc++ \
             -Wl,--gc-sections -s \
-            -ladvapi32 -lshell32 -luser32 -lkernel32
+            -lwinhttp -ladvapi32 -lshell32 -luser32 -lkernel32
 
 .PHONY: all release clean
 

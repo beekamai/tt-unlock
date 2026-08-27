@@ -1,6 +1,7 @@
 #include "ui.hpp"
 #include "adb.hpp"
 #include "apk.hpp"
+#include "bootstrap.hpp"
 #include "process.hpp"
 #include "util.hpp"
 
@@ -18,6 +19,75 @@ struct Tools {
     fs::path work;
     fs::path keystore;
 };
+
+/* System install first, our own %LOCALAPPDATA% copy as fallback — a real
+ * Android SDK on the machine keeps winning, so nothing is downloaded twice. */
+static void detect_tools(Tools& t) {
+    t.adb = adb::find_adb();
+    if (t.adb.empty()) t.adb = boot::find_adb();
+
+    t.java = adb::find_java();
+    if (t.java.empty()) t.java = boot::find_java();
+
+    t.keytool = adb::find_keytool(t.java);
+    if (t.keytool.empty()) t.keytool = boot::find_keytool();
+
+    t.apksigner = adb::find_apksigner();
+    if (t.apksigner.empty()) t.apksigner = boot::find_apksigner();
+    /* apksigner.bat resolves `java` through PATH/JAVA_HOME. With a portable
+     * JRE that is empty, so prefer the jar and drive it with our own java. */
+    if (t.apksigner.extension() == ".bat") {
+        auto jar = t.apksigner.parent_path() / "lib" / "apksigner.jar";
+        if (util::file_exists(jar)) t.apksigner = jar;
+    }
+
+    t.zipalign = adb::find_zipalign();
+    if (t.zipalign.empty()) t.zipalign = boot::find_zipalign();
+}
+
+static boot::Missing missing_of(const Tools& t) {
+    boot::Missing m;
+    m.adb = t.adb.empty();
+    /* keytool ships with java; if only one of them showed up the install is
+     * broken enough that our own JRE is the simpler answer. */
+    m.java = t.java.empty() || t.keytool.empty();
+    m.build_tools = t.apksigner.empty() || t.zipalign.empty();
+    return m;
+}
+
+static void list_missing(const boot::Missing& m) {
+    if (m.adb)         ui::warn("нет adb (Android platform-tools)");
+    if (m.java)        ui::warn("нет Java / keytool");
+    if (m.build_tools) ui::warn("нет apksigner / zipalign (Android build-tools)");
+}
+
+/* Offers the download instead of doing it silently: it is ~110 MB and the
+ * user may be on mobile data. */
+static bool offer_bootstrap(Tools& t) {
+    auto m = missing_of(t);
+    if (!m.any()) return true;
+
+    ui::section("Не хватает инструментов");
+    list_missing(m);
+    std::cout << "\n";
+    ui::dim("Могу скачать их сам с серверов Google и Adoptium (~110 MB суммарно),");
+    ui::dim("положить в " + util::sdk_root().string() + " и больше об этом не вспоминать.");
+
+    int choice = ui::menu("Что делаем", {
+        "Скачать и поставить недостающее",
+        "Не сейчас (поставлю сам)"
+    });
+    if (choice != 1) return false;
+
+    bool ok = boot::install_missing(m);
+    detect_tools(t);
+    if (ok && !missing_of(t).any()) {
+        ui::ok("Всё на месте, можно патчить.");
+        return true;
+    }
+    list_missing(missing_of(t));
+    return false;
+}
 
 static bool ensure_keystore(Tools& t) {
     t.keystore = util::exe_dir() / "tt-unlock.jks";
@@ -304,49 +374,59 @@ int main() {
 
     {
         ui::Spinner sp("Ищу adb / java / build-tools…");
-        t.adb = adb::find_adb();
-        t.java = adb::find_java();
-        t.keytool = adb::find_keytool(t.java);
-        t.apksigner = adb::find_apksigner();
-        t.zipalign = adb::find_zipalign();
+        detect_tools(t);
         sp.stop(true, "Окружение просканировано");
     }
 
-    if (t.adb.empty()) {
-        ui::fail("adb не найден. Поставь Android platform-tools или положи adb.exe в tools/");
-    }
-    if (t.java.empty()) {
-        ui::fail("Java не найдена. Поставь Temurin/Oracle JDK 17+ и добавь в PATH.");
+    if (missing_of(t).any()) {
+        offer_bootstrap(t);
+        ui::pause();
+        ui::banner();
     }
 
     for (;;) {
         int choice = ui::menu("Меню", {
             "Полный автопатч (pull → patch → sign → install)",
+            "Доустановить окружение (adb / java / build-tools)",
             "Чеклист прав и что будет происходить",
             "Диагностика (doctor)",
             "Только справка / about",
             "Выход"
         });
 
-        if (choice == 5) {
+        if (choice == 6) {
             ui::show_cursor();
             std::cout << "\n  " << ui::c::gray << "bye." << ui::c::reset << "\n";
             break;
         }
         if (choice == 2) {
+            auto m = missing_of(t);
+            if (!m.any()) {
+                ui::ok("Всё уже на месте — ставить нечего.");
+                ui::dim("adb: " + t.adb.string());
+                ui::dim("java: " + t.java.string());
+                ui::dim("apksigner: " + t.apksigner.string());
+            } else {
+                offer_bootstrap(t);
+            }
+            ui::pause();
+            ui::banner();
+            continue;
+        }
+        if (choice == 3) {
             ui::checklist_permissions();
             ui::show_steps_overview();
             ui::pause();
             ui::banner();
             continue;
         }
-        if (choice == 3) {
+        if (choice == 4) {
             doctor(t);
             ui::pause();
             ui::banner();
             continue;
         }
-        if (choice == 4) {
+        if (choice == 5) {
             ui::section("About");
             ui::box_line("TT-UNLOCK — client SIM spoof for stock TikTok");
             ui::box_line("Profile: DE Telekom  (de / 26201 / Telekom)");
@@ -354,14 +434,15 @@ int main() {
             ui::box_line("Does not hardcode store_region / account region");
             ui::box_line("Google login usually dies (Play Integrity / resign)");
             ui::box_line("Educational tooling. Ban risk is on you.");
-            ui::box_line("Static MinGW · C++17 · miniz  ·  v0.2.0");
+            ui::box_line("Auto-installs adb / build-tools / JRE when missing");
+            ui::box_line("Static MinGW · C++17 · miniz · WinHTTP  ·  v0.3.0");
             ui::pause();
             ui::banner();
             continue;
         }
         if (choice == 1) {
-            if (t.adb.empty() || t.java.empty()) {
-                ui::fail("Сначала почини окружение (пункт 3 — doctor).");
+            if (missing_of(t).any() && !offer_bootstrap(t)) {
+                ui::fail("Без adb / java / build-tools патчить нечем.");
                 ui::pause();
                 ui::banner();
                 continue;

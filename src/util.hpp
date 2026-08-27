@@ -109,6 +109,17 @@ inline std::string human_size(uint64_t n) {
     return buf;
 }
 
+inline bool env_path(const char* name, fs::path& out);
+
+/* Where auto-installed adb / build-tools / JRE live. Per-user, so no admin
+ * rights are needed and nothing collides with a real Android SDK. */
+inline fs::path sdk_root() {
+    fs::path base;
+    if (env_path("LOCALAPPDATA", base) && !base.empty())
+        return base / "tt-unlock" / "sdk";
+    return exe_dir() / "sdk";
+}
+
 inline fs::path temp_work_dir() {
     auto base = fs::temp_directory_path() / "tt-unlock";
     std::error_code ec;

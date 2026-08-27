@@ -12,7 +12,7 @@
 <p align="center">
   <img alt="platform" src="https://img.shields.io/badge/platform-Windows%20x64-blue">
   <img alt="lang" src="https://img.shields.io/badge/C%2B%2B-17-orange">
-  <img alt="version" src="https://img.shields.io/badge/version-0.2.0-informational">
+  <img alt="version" src="https://img.shields.io/badge/version-0.3.0-informational">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-green">
 </p>
 
@@ -48,10 +48,22 @@ On devices with a **RU SIM** (MCC 250), the TikTok Android client often reports 
 | Need | Notes |
 |------|--------|
 | Windows 10/11 **x64** | prebuilt static `.exe` needs no MinGW DLLs |
-| [platform-tools](https://developer.android.com/tools/releases/platform-tools) (`adb`) | on `PATH` or under `%LOCALAPPDATA%\Android\Sdk\platform-tools` |
-| Android **build-tools** (`apksigner`, `zipalign`) | via Android SDK / `ANDROID_HOME` |
-| **Java 17+** (`java`, `keytool`) | on `PATH` or `JAVA_HOME` |
 | USB debugging enabled | accept the RSA prompt on the phone |
+| Internet on first run | only if the toolchain below is missing |
+
+**The toolchain installs itself.** On a fresh machine with no Android SDK and no
+Java, the tool offers to fetch what it needs (~110 MB total) and unpacks it into
+`%LOCALAPPDATA%\tt-unlock\sdk`:
+
+| Component | Source | Size |
+|-----------|--------|------|
+| platform-tools (`adb`) | `dl.google.com` | ~8 MB |
+| build-tools (`apksigner`, `zipalign`) | `dl.google.com` | ~56 MB |
+| Java 21 JRE (`java`, `keytool`) | Adoptium API | ~47 MB |
+
+No admin rights, no installer, no `PATH` changes. An SDK or JDK already on the
+machine is detected first and reused, so nothing is downloaded twice. To undo
+everything, delete that one folder.
 
 Optional for building from source: MSYS2 MinGW64 (`g++` / `gcc`).
 
@@ -98,7 +110,14 @@ make release
 ```text
 tt-unlock/
   release/tt-unlock.exe   # static prebuild
-  src/                    # C++17 sources
+  src/
+    main.cpp              # menu, pipeline, tool detection
+    dex_patch.hpp         # the SIM spoof itself
+    adb.hpp  apk.hpp      # device I/O, apk repack
+    bootstrap.hpp         # auto-install of adb / build-tools / JRE
+    netfetch.hpp          # WinHTTP download
+    unzip.hpp             # miniz extraction (zip-slip safe)
+    ui.hpp  util.hpp  process.hpp
   third_party/miniz/      # zip + deflate
   build.ps1  Makefile
   README.md  LICENSE
@@ -126,10 +145,21 @@ tt-unlock/
 ### Нужно на любом ПК
 
 - Windows 10/11 x64  
-- `adb` (platform-tools)  
-- build-tools: `apksigner`, `zipalign`  
-- Java 17+  
 - USB-отладка  
+- интернет при первом запуске — только если чего-то из тулчейна нет  
+
+**Тулчейн ставится сам.** На чистой машине без Android SDK и Java тул предложит
+скачать недостающее (~110 MB) и распакует в `%LOCALAPPDATA%\tt-unlock\sdk`:
+
+| Компонент | Откуда | Размер |
+|-----------|--------|--------|
+| platform-tools (`adb`) | `dl.google.com` | ~8 MB |
+| build-tools (`apksigner`, `zipalign`) | `dl.google.com` | ~56 MB |
+| Java 21 JRE (`java`, `keytool`) | Adoptium API | ~47 MB |
+
+Без прав администратора, без инсталлятора, `PATH` не трогается. Уже стоящие в
+системе SDK/JDK находятся первыми и переиспользуются — второй раз ничего не
+качается. Чтобы откатить всё — удалить эту папку.
 
 ### Запуск
 

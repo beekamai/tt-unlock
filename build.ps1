@@ -45,7 +45,7 @@ $cxxflags = @(
 $ldflags = @(
     "-static", "-static-libgcc", "-static-libstdc++",
     "-Wl,--gc-sections", "-s",
-    "-ladvapi32", "-lshell32", "-luser32", "-lkernel32"
+    "-lwinhttp", "-ladvapi32", "-lshell32", "-luser32", "-lkernel32"
 )
 
 Write-Host "Linking $out ..."

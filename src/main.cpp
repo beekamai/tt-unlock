@@ -176,33 +176,77 @@ static int run_full_patch(Tools& t) {
         if (d.state == "device") { local = d; pick = &local; break; }
     }
     if (!pick) {
-        sp.stop(false, "Нет device в состоянии device");
-        fail("Подключи телефон, разреши отладку USB, нажми Enter и повтори.");
-        for (auto& d : devs) dim(d.serial + "  [" + d.state + "]");
+        sp.stop(false, "Телефон не готов");
+        bool unauthorized = false, offline = false;
+        for (auto& d : devs) {
+            if (d.state.find("unauthorized") != std::string::npos) unauthorized = true;
+            if (d.state.find("offline") != std::string::npos) offline = true;
+            dim(d.serial + "  [" + d.state + "]");
+        }
+        if (unauthorized)
+            fail("На телефоне висит окно «Разрешить отладку по USB?» — нажми «Разрешить»\n"
+                 "     и поставь галочку «Всегда разрешать с этого компьютера».");
+        else if (offline)
+            fail("Телефон в состоянии offline: перевоткни кабель или переключи режим USB\n"
+                 "     на «Передача файлов».");
+        else
+            fail("Телефон не виден. Включи «Отладка по USB» в меню «Для разработчиков»\n"
+                 "     и подключи кабелем (не только для зарядки).");
         return 1;
     }
     sp.stop(true, "Устройство: " + pick->serial);
 
-    section("2/6  Ищу TikTok");
+    section("2/6  Проверяю TikTok на телефоне");
     Spinner sp2("pm path " + std::string(kPkg));
     auto paths = adb::pm_paths(t.adb, kPkg);
     if (paths.empty()) {
         sp2.stop(false, "TikTok не установлен");
-        fail("Поставь TikTok из Play, потом запусти патч снова.");
+        fail("Поставь оригинальный TikTok из Play Маркета, открой его,");
+        fail("полистай ленту и зайди в чей-нибудь профиль — потом запусти патч снова.");
         return 1;
     }
     sp2.stop(true, "Найдено splits: " + std::to_string(paths.size()));
-    for (auto& p : paths) dim(p);
-    // Full TikTok usually ships 30–50+ splits (player, ship, camera…).
-    // Sideload of a thin install (≤20) without df_player → profile videos die.
+
+    auto installer = adb::installer_of(t.adb, kPkg);
+    if (installer == "com.android.vending") ok("Установлен из Play Маркета");
+    else if (!installer.empty() && installer != "null")
+        warn("Установлен не из Play (" + installer + ") — модули могут не докачаться.");
+
+    /* A full TikTok ships 30-50 splits. A thin install has no df_player, and
+     * after our resign Play can no longer deliver the rest: profile videos and
+     * the camera stay dead for good. Stopping here is the whole point — the
+     * previous version only warned, and people lost their working install. */
     bool has_player = false;
     for (auto& p : paths) {
         if (p.find("df_player") != std::string::npos) has_player = true;
     }
     if (paths.size() < 25 || !has_player) {
-        warn("Мало splits / нет split_df_player — видео в профилях могут не грузиться.");
-        warn("Поставь полный TikTok из Play, дождись докачки модулей, потом патчь снова.");
-        info("Или используй полный набор signed splits (43 apk) из папки patched/.");
+        std::cout << "\n";
+        fail("TikTok установлен не полностью: " + std::to_string(paths.size()) +
+             " модулей" + (has_player ? "" : ", нет df_player") + ".");
+        std::cout << "\n";
+        info("Модули докачиваются только из Play и только пока клиент оригинальный.");
+        info("После патча подпись меняется, и Play их уже не даст — видео в профилях");
+        info("и камера останутся нерабочими навсегда.");
+        std::cout << "\n";
+        box_line("Что сделать (5 минут):");
+        box_line("  1. Открыть TikTok");
+        box_line("  2. Полистать ленту, досмотреть 2-3 видео до конца");
+        box_line("  3. Зайти в чей-нибудь профиль и открыть видео оттуда");
+        box_line("  4. Нажать «+» (камера) и вернуться назад");
+        box_line("  5. Побыть в Wi-Fi минуту, пока модули докачаются");
+        box_line("Потом снова сюда — пункт [1].");
+        std::cout << "\n";
+
+        int c = menu("Всё равно продолжить?", {
+            "Нет — сначала докачаю модули (рекомендую)",
+            "Да, патчить как есть"
+        });
+        if (c != 2) {
+            info("Ок, ничего не трогала. Телефон как был.");
+            return 0;
+        }
+        warn("Продолжаю на неполном наборе — видео в профилях, скорее всего, умрут.");
     }
 
     section("3/6  Скачиваю APK");
@@ -287,20 +331,51 @@ static int run_full_patch(Tools& t) {
     }
 
     section("6/6  Установка");
-    warn("Сейчас удалю stock TikTok (данные сбросятся) и поставлю патч.");
+    warn("Сейчас удалю stock TikTok — данные и вход в аккаунт сбросятся.");
+    info("СМОТРИ НА ТЕЛЕФОН: появится окно «Установить приложение?» — нажми «Установить».");
+    info("Если ничего не нажать, Android отменит установку сам.");
+    std::cout << "\n";
     {
         Spinner spu("uninstall " + std::string(kPkg));
         adb::uninstall(t.adb, kPkg);
-        spu.stop(true, "uninstall done");
+        spu.stop(true, "stock удалён");
     }
     {
-        Spinner spi("install-multiple (" + std::to_string(signed_apks.size()) + " apks)…");
-        if (!adb::install_multiple(t.adb, signed_apks)) {
-            spi.stop(false, "install-multiple failed");
-            fail("Проверь: разрешить установку из USB/неизвестных источников");
+        Spinner spi("install-multiple (" + std::to_string(signed_apks.size()) + " apk)…");
+        auto r = adb::install_multiple(t.adb, signed_apks);
+        if (!adb::install_ok(r)) {
+            spi.stop(false, "установка не прошла");
+
+            /* Show what adb actually said — guessing at the reason is how the
+             * old build sent people to the wrong settings screen. */
+            auto raw = util::trim(r.out + "\n" + r.err);
+            if (!raw.empty()) {
+                for (auto& L : util::split_lines(raw)) {
+                    auto s = util::trim(L);
+                    if (!s.empty()) dim(s);
+                }
+            }
+            std::cout << "\n";
+            auto hint = adb::install_hint(r);
+            if (!hint.empty()) for (auto& L : util::split_lines(hint)) fail(L);
+            else fail("Причина выше. Чаще всего — «Установка через USB» в меню «Для разработчиков».");
+
+            /* The stock splits are still on disk and still carry TikTok's own
+             * signature, so we can undo the uninstall instead of leaving the
+             * phone with no TikTok at all. */
+            std::cout << "\n";
+            Spinner spr("Возвращаю стоковый TikTok…");
+            auto back = adb::install_multiple(t.adb, local_apks);
+            if (adb::install_ok(back)) {
+                spr.stop(true, "Стоковый TikTok вернулся на место");
+                info("Телефон в исходном состоянии. Почини настройку выше и запусти патч снова.");
+            } else {
+                spr.stop(false, "Откат не удался");
+                warn("TikTok сейчас не установлен. Поставь его из Play Маркета.");
+            }
             return 1;
         }
-        spi.stop(true, "Success");
+        spi.stop(true, "Установлено");
     }
 
     // copy durable artifacts next to exe
@@ -386,9 +461,9 @@ int main() {
 
     for (;;) {
         int choice = ui::menu("Меню", {
-            "Полный автопатч (pull → patch → sign → install)",
-            "Доустановить окружение (adb / java / build-tools)",
-            "Чеклист прав и что будет происходить",
+            "Пропатчить TikTok — всё автоматически",
+            "Доустановить окружение (adb / Java / build-tools)",
+            "Инструкция: что сделать на телефоне",
             "Диагностика (doctor)",
             "Только справка / about",
             "Выход"
@@ -435,7 +510,7 @@ int main() {
             ui::box_line("Google login usually dies (Play Integrity / resign)");
             ui::box_line("Educational tooling. Ban risk is on you.");
             ui::box_line("Auto-installs adb / build-tools / JRE when missing");
-            ui::box_line("Static MinGW · C++17 · miniz · WinHTTP  ·  v0.3.0");
+            ui::box_line("Static MinGW · C++17 · miniz · WinHTTP  ·  v0.4.0");
             ui::pause();
             ui::banner();
             continue;

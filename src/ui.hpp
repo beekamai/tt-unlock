@@ -120,7 +120,7 @@ inline void banner() {
     }
     std::cout << "\n";
     print_center("TikTok SIM spoof  ·  DE Telekom  ·  adb DEX patcher", c::cyan);
-    print_center("v0.3.0  ·  static Windows build  ·  educational tooling", c::gray);
+    print_center("v0.4.0  ·  static Windows build  ·  educational tooling", c::gray);
     std::cout << "\n";
     hr();
     std::cout << "\n";
@@ -263,18 +263,36 @@ inline void pause(const std::string& msg = "Нажми Enter, чтобы про�
 }
 
 inline void checklist_permissions() {
-    section("Перед стартом — чеклист");
-    box_line("1. На телефоне: Настройки → Для разработчиков");
-    box_line("2. Включи «Отладка по USB»");
-    box_line("3. (MIUI) «Отладка USB (параметры безопасности)» — если есть");
-    box_line("4. Подключи кабель, на телефоне «Разрешить отладку» → OK");
-    box_line("5. VPN (DE/не-RU exit) включён — Happ / свой клиент");
-    box_line("6. Java 17+ в PATH (для apksigner / keytool)");
-    box_line("7. TikTok можно снести — данные/сессия сбросятся");
+    section("Что сделать на телефоне (один раз)");
+
+    box_line("1. TikTok — оригинальный, из Play Маркета", c::white);
+    box_line("   Открой его, полистай ленту, досмотри 2-3 видео,", c::gray);
+    box_line("   зайди в чужой профиль, нажми «+» (камера).", c::gray);
+    box_line("   Так докачаются модули: без них видео в профилях не работают,", c::gray);
+    box_line("   а после патча Play их уже не отдаст.", c::gray);
     std::cout << "\n";
-    warn("Переподпись убивает Play Integrity → Google login обычно НЕ работает.");
-    info("Вход по почте / username+password — ок (проверено).");
-    info("SIM spoof: ISO de + MCC 26201 + Telekom (+ hub 155y → DE)");
+
+    box_line("2. Настройки → О телефоне → 7 раз по «Номер сборки»", c::white);
+    box_line("   (на Xiaomi — по «Версия HyperOS/MIUI»)", c::gray);
+    std::cout << "\n";
+
+    box_line("3. Настройки → Для разработчиков → включи два пункта:", c::white);
+    box_line("   • Отладка по USB", c::gray);
+    box_line("   • Установка через USB   ← без неё установка упадёт", c::gray);
+    box_line("   Xiaomi: второй тумблер требует Mi-аккаунт, SIM и интернет.", c::gray);
+    std::cout << "\n";
+
+    box_line("4. Подключи кабель, режим USB — «Передача файлов»", c::white);
+    box_line("   На телефоне: «Разрешить отладку?» → Разрешить + Всегда", c::gray);
+    std::cout << "\n";
+
+    box_line("5. VPN с выходом НЕ из РФ (лучше DE) — включить", c::white);
+    box_line("   Обязательно ДО первого запуска патченого TikTok.", c::gray);
+    std::cout << "\n";
+
+    warn("Во время установки телефон спросит «Установить приложение?» — нажми «Установить».");
+    warn("TikTok будет удалён и поставлен заново: аккаунт и данные сбросятся.");
+    warn("Google-вход после патча не работает (Play Integrity). Почта/пароль — работает.");
 }
 
 inline void show_steps_overview() {
@@ -300,10 +318,15 @@ inline void success_finale() {
     print_center("✦  ПАТЧ УСТАНОВЛЕН  ✦", c::mint);
     hr(c::mint);
     std::cout << "\n";
-    ok("TikTok переустановлен с SIM spoof → DE Telekom");
-    info("Открой приложение → день рождения 18+ → гость или почта");
-    info("VPN DE включи ДО первого открытия (иначе server device_id)");
-    warn("Не обновляй TikTok из Play — снесёт патч. Гоняй этот тул снова.");
+    ok("TikTok переустановлен: телефон теперь представляется как DE Telekom");
+    std::cout << "\n";
+    box_line("Дальше на телефоне:", c::white);
+    box_line("  1. Включи VPN (DE / не-RU) — ДО первого открытия", c::gray);
+    box_line("  2. Открой TikTok, укажи год рождения 18+", c::gray);
+    box_line("  3. Смотри гостем или войди по почте", c::gray);
+    std::cout << "\n";
+    warn("Не обновляй TikTok из Play — обновление снесёт патч. После него гоняй тул снова.");
+    info("Подписанные APK лежат в папке output/ рядом с exe — на случай переустановки.");
     std::cout << "\n";
 }
 

@@ -12,7 +12,7 @@
 <p align="center">
   <img alt="platform" src="https://img.shields.io/badge/platform-Windows%20x64-blue">
   <img alt="lang" src="https://img.shields.io/badge/C%2B%2B-17-orange">
-  <img alt="version" src="https://img.shields.io/badge/version-0.3.0-informational">
+  <img alt="version" src="https://img.shields.io/badge/version-0.4.0-informational">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-green">
 </p>
 
@@ -69,20 +69,53 @@ Optional for building from source: MSYS2 MinGW64 (`g++` / `gcc`).
 
 ### Quick start (release binary)
 
-1. Download `tt-unlock.exe` from [Releases](../../releases) (or use `release/tt-unlock.exe` from this repo).
-2. Connect the phone, enable USB debugging.
-3. Install a **full** TikTok from Play, open it once (scroll + open a profile) so dynamic modules like `df_player` download.
-4. Turn **VPN DE (or non-RU exit) ON before** first open of the patched app.
-5. Run:
+**On the phone, once:**
+
+1. Install the **original** TikTok from Play. Open it, scroll the feed, watch
+   2–3 videos to the end, open someone's profile, tap `+` (camera).
+   This pulls the dynamic modules (`df_player`, `df_camera_biz`, …). They only
+   come from Play, and only while the client is unmodified — after the resign
+   Play will not deliver them, and profile videos stay broken for good.
+2. Settings → About phone → tap **Build number** 7 times (Xiaomi: *HyperOS/MIUI version*).
+3. Settings → Developer options → enable **both**:
+   - **USB debugging**
+   - **Install via USB** ← installs fail without it
+   On Xiaomi this second toggle needs a Mi account, a SIM and internet, otherwise it flips back.
+4. Plug in the cable, set USB mode to **File transfer**, accept *Allow USB debugging* (tick *Always*).
+5. Turn on a **non-RU VPN** (DE preferred) before first launch of the patched app.
+
+**On the PC:**
 
 ```text
 tt-unlock.exe
 ```
 
-6. Menu → **[1] Full auto-patch**.
-7. After install: set birthday (18+), guest or email login. Google login usually fails (Play Integrity).
+Menu → **[1]** (*Пропатчить TikTok* — patch TikTok, fully automatic; the UI is
+Russian). The tool checks the device, the install source, the module set and the
+toolchain on its own, then pulls, patches, signs and installs.
 
-First run creates `tt-unlock.jks` next to the exe (local signing key). Signed APKs are copied to `output/`.
+**Watch the phone during install** — Android shows *Install app?* and waits.
+Nothing pressed, nothing installed.
+
+Afterwards: birthday 18+, guest or email login. Google login usually fails
+(Play Integrity).
+
+First run creates `tt-unlock.jks` next to the exe (local signing key). Signed
+APKs are copied to `output/`.
+
+### If install fails
+
+The tool prints adb's own error and reinstalls the stock TikTok it pulled, so
+the phone never ends up with no TikTok at all. What the codes mean:
+
+| adb says | Fix |
+|----------|-----|
+| `INSTALL_FAILED_USER_RESTRICTED` | enable **Install via USB** in Developer options |
+| `INSTALL_FAILED_ABORTED` | the *Install app?* dialog on the phone was not confirmed |
+| `INSTALL_FAILED_VERIFICATION_FAILURE` | turn Play Protect off for the install |
+| `INSTALL_FAILED_MISSING_SPLIT` | TikTok was incomplete — reinstall from Play, use it, patch again |
+| `INSTALL_FAILED_UPDATE_INCOMPATIBLE` | another TikTok with a different signature is still on the device (work profile / second user) |
+| `INSTALL_FAILED_INSUFFICIENT_STORAGE` | free up ~1 GB |
 
 ### Important
 
@@ -163,11 +196,49 @@ tt-unlock/
 
 ### Запуск
 
-1. Скачай `tt-unlock.exe` из Releases (или `release/tt-unlock.exe`).  
-2. Полный TikTok из Play → открой, скролл, зайди в профиль (докачка `df_player`).  
-3. **VPN DE включи до** первого запуска патченого клиента.  
-4. `tt-unlock.exe` → **[1] Full auto-patch**.  
-5. ДР 18+, гость или почта (Google login обычно мёртв).
+**На телефоне, один раз:**
+
+1. Поставь **оригинальный** TikTok из Play Маркета. Открой, полистай ленту,
+   досмотри 2–3 видео до конца, зайди в чужой профиль, нажми `+` (камера).
+   Так докачаются модули (`df_player`, `df_camera_biz`, …). Они приходят только
+   из Play и только пока клиент оригинальный — после переподписи Play их уже не
+   отдаст, и видео в профилях останутся нерабочими навсегда.
+2. Настройки → О телефоне → 7 раз по **«Номер сборки»** (Xiaomi — по *«Версия HyperOS/MIUI»*).
+3. Настройки → Для разработчиков → включи **оба** пункта:
+   - **Отладка по USB**
+   - **Установка через USB** ← без неё установка упадёт
+   На Xiaomi второй тумблер требует Mi-аккаунт, SIM и интернет, иначе отскакивает.
+4. Подключи кабель, режим USB — **«Передача файлов»**, подтверди *«Разрешить отладку»* (галочка *«Всегда»*).
+5. Включи **VPN не из РФ** (лучше DE) — до первого запуска патченого клиента.
+
+**На ПК:**
+
+```text
+tt-unlock.exe
+```
+
+Меню → **[1] Пропатчить TikTok — всё автоматически**. Тул сам проверит телефон,
+откуда установлен TikTok, полный ли набор модулей и своё окружение, потом снимет
+APK, пропатчит, подпишет и поставит.
+
+**Смотри на телефон во время установки** — Android покажет окно *«Установить
+приложение?»* и будет ждать. Не нажать = не установится.
+
+Дальше: ДР 18+, гость или вход по почте (Google-вход обычно мёртв).
+
+### Если установка упала
+
+Тул печатает то, что реально сказал adb, и возвращает стоковый TikTok, который
+сам же и снял — телефон не остаётся без приложения. Что значат коды:
+
+| adb пишет | Что делать |
+|-----------|------------|
+| `INSTALL_FAILED_USER_RESTRICTED` | включить **«Установка через USB»** в меню «Для разработчиков» |
+| `INSTALL_FAILED_ABORTED` | на телефоне не подтвердили окно *«Установить приложение?»* |
+| `INSTALL_FAILED_VERIFICATION_FAILURE` | выключить Play Protect на время установки |
+| `INSTALL_FAILED_MISSING_SPLIT` | TikTok был неполный — переставить из Play, попользоваться, патчить снова |
+| `INSTALL_FAILED_UPDATE_INCOMPATIBLE` | на устройстве остался TikTok с другой подписью (рабочий профиль / вторая учётка) |
+| `INSTALL_FAILED_INSUFFICIENT_STORAGE` | освободить ~1 GB |
 
 ### Важно
 

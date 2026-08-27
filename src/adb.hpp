@@ -210,11 +210,55 @@ inline bool uninstall(const fs::path& adb, const std::string& pkg) {
            r.out.find("DELETE_FAILED") != std::string::npos;
 }
 
-inline bool install_multiple(const fs::path& adb, const std::vector<fs::path>& apks) {
+inline proc::Result install_multiple(const fs::path& adb, const std::vector<fs::path>& apks) {
     std::vector<std::string> args = {adb.string(), "install-multiple", "-r"};
     for (auto& p : apks) args.push_back(p.string());
-    auto r = proc::run(args, {}, 600000);
+    return proc::run(args, {}, 600000);
+}
+
+inline bool install_ok(const proc::Result& r) {
     return r.ok() || r.out.find("Success") != std::string::npos;
+}
+
+/* Turns adb's INSTALL_FAILED_* into the one thing the user has to go and do.
+ * Without this the tool used to guess "allow unknown sources", which is the
+ * wrong setting for adb installs and sent people looking in the wrong menu. */
+inline std::string install_hint(const proc::Result& r) {
+    const std::string t = r.out + "\n" + r.err;
+    auto has = [&t](const char* s) { return t.find(s) != std::string::npos; };
+
+    if (has("INSTALL_FAILED_USER_RESTRICTED"))
+        return "Телефон запретил установку с ПК.\n"
+               "Настройки → Для разработчиков → включи «Установка через USB».\n"
+               "На Xiaomi нужен вход в Mi-аккаунт, SIM и интернет, иначе тумблер отскакивает.";
+    if (has("INSTALL_FAILED_ABORTED") || has("abandon") || has("Session was abandoned"))
+        return "Установку отклонили на экране телефона.\n"
+               "Повтори и нажми «Установить» в окне, которое появится на телефоне.";
+    if (has("INSTALL_FAILED_VERIFICATION_FAILURE") || has("INSTALL_FAILED_VERIFICATION_TIMEOUT"))
+        return "Заблокировал Play Protect.\n"
+               "Play Маркет → профиль → Play Защита → выключи проверку на время установки.";
+    if (has("INSTALL_FAILED_MISSING_SPLIT"))
+        return "Набору не хватает модулей: TikTok на телефоне был неполный.\n"
+               "Поставь TikTok из Play, полистай ленту и открой чей-нибудь профиль, потом патчь заново.";
+    if (has("INSTALL_FAILED_UPDATE_INCOMPATIBLE") || has("signatures do not match"))
+        return "На телефоне остался TikTok с другой подписью — его надо удалить.\n"
+               "Проверь, что удалены все профили (рабочий профиль / вторая учётка).";
+    if (has("INSTALL_FAILED_INSUFFICIENT_STORAGE"))
+        return "На телефоне не хватает места — нужно ~1 GB свободного.";
+    if (has("INSTALL_FAILED_INVALID_APK") || has("INSTALL_PARSE_FAILED"))
+        return "Android не принял APK. Скорее всего набор splits неполный или битый.";
+    return {};
+}
+
+/* Which store installed the package: com.android.vending == Google Play. */
+inline std::string installer_of(const fs::path& adb, const std::string& pkg) {
+    auto r = proc::run({adb.string(), "shell", "-n",
+                        "pm list packages -i " + pkg}, {}, 30000);
+    for (auto& L : util::split_lines(r.out)) {
+        auto pos = L.find("installer=");
+        if (pos != std::string::npos) return util::trim(L.substr(pos + 10));
+    }
+    return {};
 }
 
 } // namespace adb

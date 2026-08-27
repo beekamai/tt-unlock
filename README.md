@@ -120,7 +120,7 @@ the phone never ends up with no TikTok at all. What the codes mean:
 ### Important
 
 - Operator codes stay **numeric** (`26201`). Spoofing MCC as `"de"` breaks CDN.
-- If the tool reports **few splits / no `df_player`**, stop — install a complete TikTok first, then patch again.
+- **Few splits / no `df_player`** does not break the install — the feed and the region unlock still work, because the patch lives in `base.apk`. What breaks is profile videos and the camera, and Play will not deliver those modules after the resign. The tool says so and lets you choose.
 - Play updates restore stock code; re-run the tool after updates.
 - Server-side `device_id` / account history can still limit some surfaces (e.g. search) even with a clean SIM spoof.
 - Modified client → ban / policy risk. Educational tooling; you are responsible for use.

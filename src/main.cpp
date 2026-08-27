@@ -212,41 +212,37 @@ static int run_full_patch(Tools& t) {
     else if (!installer.empty() && installer != "null")
         warn("Установлен не из Play (" + installer + ") — модули могут не докачаться.");
 
-    /* A full TikTok ships 30-50 splits. A thin install has no df_player, and
-     * after our resign Play can no longer deliver the rest: profile videos and
-     * the camera stay dead for good. Stopping here is the whole point — the
-     * previous version only warned, and people lost their working install. */
+    /* A full TikTok ships 30-50 splits. A thin one installs and unlocks the
+     * feed just fine — the patch lives in base.apk, which is always there.
+     * What it costs is features: profile videos and the camera need df_player
+     * and df_camera_biz, and after the resign Play will not deliver them.
+     * So this is a choice to present, not a reason to refuse. */
     bool has_player = false;
     for (auto& p : paths) {
         if (p.find("df_player") != std::string::npos) has_player = true;
     }
     if (paths.size() < 25 || !has_player) {
         std::cout << "\n";
-        fail("TikTok установлен не полностью: " + std::to_string(paths.size()) +
+        warn("TikTok установлен не полностью: " + std::to_string(paths.size()) +
              " модулей" + (has_player ? "" : ", нет df_player") + ".");
         std::cout << "\n";
-        info("Модули докачиваются только из Play и только пока клиент оригинальный.");
-        info("После патча подпись меняется, и Play их уже не даст — видео в профилях");
-        info("и камера останутся нерабочими навсегда.");
+        info("Установку это не ломает: лента и регион-анлок заработают.");
+        info("Не будут работать: видео в чужих профилях, камера и съёмка.");
+        info("Докачать потом не выйдет — после патча Play модули не отдаёт.");
         std::cout << "\n";
-        box_line("Что сделать (5 минут):");
-        box_line("  1. Открыть TikTok");
-        box_line("  2. Полистать ленту, досмотреть 2-3 видео до конца");
-        box_line("  3. Зайти в чей-нибудь профиль и открыть видео оттуда");
-        box_line("  4. Нажать «+» (камера) и вернуться назад");
-        box_line("  5. Побыть в Wi-Fi минуту, пока модули докачаются");
-        box_line("Потом снова сюда — пункт [1].");
+        box_line("Докачать сейчас (5 минут):", c::white);
+        box_line("  открыть TikTok → полистать ленту → досмотреть 2-3 видео", c::gray);
+        box_line("  → зайти в чужой профиль → нажать «+» (камера) → Wi-Fi минуту", c::gray);
         std::cout << "\n";
 
-        int c = menu("Всё равно продолжить?", {
-            "Нет — сначала докачаю модули (рекомендую)",
-            "Да, патчить как есть"
+        int c = menu("Что делаем", {
+            "Продолжить — нужна только лента",
+            "Выйти, докачаю модули и вернусь"
         });
-        if (c != 2) {
+        if (c == 2) {
             info("Ок, ничего не трогала. Телефон как был.");
             return 0;
         }
-        warn("Продолжаю на неполном наборе — видео в профилях, скорее всего, умрут.");
     }
 
     section("3/6  Скачиваю APK");
